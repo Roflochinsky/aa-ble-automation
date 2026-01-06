@@ -1,0 +1,56 @@
+# Секретные файлы (НЕ КОММИТИТЬ!)
+.env
+credentials.json
+facilities_config.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+ENV/
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+.eggs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Тесты
+.pytest_cache/
+.hypothesis/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+
+# Временные файлы
+*.log
+*.tmp
+*.temp
+output/
+
+# Выходные HTML-отчёты (генерируются автоматически)
+AA_BLE_*.html
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Kiro
+.kiro/

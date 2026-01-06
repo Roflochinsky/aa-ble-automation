@@ -1,0 +1,21 @@
+# AA_BLE Automation - Docker Compose
+# Requirements: 6.1
+
+version: '3.8'
+
+services:
+  aa-ble-automation:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aa-ble-automation
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Mount credentials file
+      - ./credentials.json:/app/credentials.json:ro
+      # Mount output directory for reports
+      - ./output:/app/output
+    environment:
+      - TZ=Europe/Moscow

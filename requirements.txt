@@ -1,0 +1,25 @@
+# AA_BLE Automation - Dependencies
+# Requirements: 5.1
+
+# Data processing
+pandas>=2.0.0
+openpyxl>=3.1.0
+
+# Visualization
+plotly>=5.18.0
+
+# Google APIs
+google-api-python-client>=2.100.0
+google-auth>=2.23.0
+google-auth-oauthlib>=1.1.0
+google-auth-httplib2>=0.1.1
+
+# Telegram
+python-telegram-bot>=20.6
+
+# Configuration
+python-dotenv>=1.0.0
+
+# Testing
+hypothesis>=6.92.0
+pytest>=7.4.0
