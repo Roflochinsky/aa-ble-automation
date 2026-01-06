@@ -102,13 +102,14 @@ class TelegramLogger:
         
         return parts
     
-    def _send_message_sync(self, text: str, parse_mode: Optional[str] = None) -> bool:
+    def _send_message_sync(self, text: str, parse_mode: Optional[str] = None, retries: int = 3) -> bool:
         """
-        Синхронная отправка сообщения.
+        Синхронная отправка сообщения с retry.
         
         Args:
             text: Текст сообщения
             parse_mode: Режим парсинга (HTML, Markdown, None)
+            retries: Количество попыток
             
         Returns:
             True если отправка успешна
@@ -116,26 +117,46 @@ class TelegramLogger:
         if not self._enabled or not self.bot:
             return False
         
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        import time
+        
+        for attempt in range(retries):
             try:
-                loop.run_until_complete(
-                    self.bot.send_message(
-                        chat_id=self.chat_id,
-                        text=text,
-                        parse_mode=parse_mode
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(
+                        self.bot.send_message(
+                            chat_id=self.chat_id,
+                            text=text,
+                            parse_mode=parse_mode
+                        )
                     )
-                )
-                return True
-            finally:
-                loop.close()
-        except TelegramError as e:
-            logger.error(f"Ошибка отправки в Telegram: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"Неожиданная ошибка при отправке в Telegram: {e}")
-            return False
+                    return True
+                finally:
+                    loop.close()
+            except TelegramError as e:
+                error_msg = str(e)
+                if "Flood control" in error_msg or "Retry in" in error_msg:
+                    # Извлекаем время ожидания из сообщения
+                    wait_time = 15
+                    if "Retry in" in error_msg:
+                        try:
+                            wait_time = int(''.join(filter(str.isdigit, error_msg.split("Retry in")[1][:5]))) + 1
+                        except:
+                            wait_time = 15
+                    logger.warning(f"Flood control, ждём {wait_time} сек...")
+                    time.sleep(wait_time)
+                    continue
+                logger.error(f"Ошибка отправки в Telegram: {e}")
+                return False
+            except Exception as e:
+                logger.error(f"Неожиданная ошибка при отправке в Telegram: {e}")
+                if attempt < retries - 1:
+                    time.sleep(2)
+                    continue
+                return False
+        
+        return False
 
     def info(self, message: str) -> None:
         """
@@ -226,15 +247,17 @@ class TelegramLogger:
         self, 
         content: bytes, 
         filename: str, 
-        caption: Optional[str] = None
+        caption: Optional[str] = None,
+        retries: int = 3
     ) -> bool:
         """
-        Отправка документа из памяти (bytes) в чат.
+        Отправка документа из памяти (bytes) в чат с retry.
         
         Args:
             content: Содержимое файла в байтах
             filename: Имя файла для отображения
             caption: Подпись к файлу (опционально)
+            retries: Количество попыток
             
         Returns:
             True если отправка успешна
@@ -243,29 +266,47 @@ class TelegramLogger:
             logger.warning("Telegram не настроен, файл не отправлен")
             return False
         
-        try:
-            from io import BytesIO
-            
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        import time
+        from io import BytesIO
+        
+        for attempt in range(retries):
             try:
-                file_obj = BytesIO(content)
-                file_obj.name = filename
-                
-                loop.run_until_complete(
-                    self.bot.send_document(
-                        chat_id=self.chat_id,
-                        document=file_obj,
-                        filename=filename,
-                        caption=caption
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    file_obj = BytesIO(content)
+                    file_obj.name = filename
+                    
+                    loop.run_until_complete(
+                        self.bot.send_document(
+                            chat_id=self.chat_id,
+                            document=file_obj,
+                            filename=filename,
+                            caption=caption
+                        )
                     )
-                )
-                return True
-            finally:
-                loop.close()
-        except TelegramError as e:
-            logger.error(f"Ошибка отправки документа в Telegram: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"Неожиданная ошибка при отправке документа: {e}")
-            return False
+                    return True
+                finally:
+                    loop.close()
+            except TelegramError as e:
+                error_msg = str(e)
+                if "Flood control" in error_msg or "Retry in" in error_msg:
+                    wait_time = 15
+                    if "Retry in" in error_msg:
+                        try:
+                            wait_time = int(''.join(filter(str.isdigit, error_msg.split("Retry in")[1][:5]))) + 1
+                        except:
+                            wait_time = 15
+                    logger.warning(f"Flood control, ждём {wait_time} сек...")
+                    time.sleep(wait_time)
+                    continue
+                logger.error(f"Ошибка отправки документа в Telegram: {e}")
+                return False
+            except Exception as e:
+                logger.error(f"Неожиданная ошибка при отправке документа: {e}")
+                if attempt < retries - 1:
+                    time.sleep(2)
+                    continue
+                return False
+        
+        return False
