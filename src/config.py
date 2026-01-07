@@ -10,7 +10,7 @@ import json
 import os
 import sys
 from dataclasses import dataclass, field
-from typing import Optional, Tuple, List
+from typing import Optional, List
 from dotenv import load_dotenv
 
 
@@ -45,8 +45,6 @@ class ConfigManager:
     telegram_chat_id: str
     
     # Processing
-    time_window_start: Tuple[int, int]
-    time_window_end: Tuple[int, int]
     row_height: int
     
     # Площадки
@@ -107,12 +105,6 @@ class ConfigManager:
             'GSHEETS_PEOPLE_MAPPING_SHEET', 'gsheets_people_mapping_sheet', 'Sheet1'
         )
         
-        # Временное окно
-        time_start_str = get_param('TIME_WINDOW_START', 'time_window_start', '6:00')
-        time_end_str = get_param('TIME_WINDOW_END', 'time_window_end', '23:00')
-        time_window_start = cls._parse_time(time_start_str)
-        time_window_end = cls._parse_time(time_end_str)
-        
         # Высота строки
         row_height_str = get_param('ROW_HEIGHT', 'row_height', '60')
         row_height = int(row_height_str)
@@ -138,8 +130,6 @@ class ConfigManager:
             gsheets_ble_journal_sheet=gsheets_ble_journal_sheet,
             gsheets_people_mapping_id=gsheets_people_mapping_id,
             gsheets_people_mapping_sheet=gsheets_people_mapping_sheet,
-            time_window_start=time_window_start,
-            time_window_end=time_window_end,
             row_height=row_height,
             facilities=facilities,
         )
@@ -167,14 +157,6 @@ class ConfigManager:
         except json.JSONDecodeError as e:
             print(f"ERROR: Invalid JSON in {path}: {e}", file=sys.stderr)
             sys.exit(1)
-    
-    @staticmethod
-    def _parse_time(time_str: str) -> Tuple[int, int]:
-        """Парсит строку времени в формате HH:MM."""
-        parts = time_str.strip().split(':')
-        hours = int(parts[0])
-        minutes = int(parts[1]) if len(parts) > 1 else 0
-        return (hours, minutes)
     
     def _validate_required(self) -> List[str]:
         """Проверка обязательных параметров."""
@@ -208,12 +190,6 @@ class ConfigManager:
         """Полная валидация конфигурации."""
         # Проверяем глобальные параметры
         if self._validate_required():
-            return False
-        
-        # Проверяем временное окно
-        if not (0 <= self.time_window_start[0] <= 23):
-            return False
-        if not (0 <= self.time_window_end[0] <= 23):
             return False
         
         # Проверяем высоту строки

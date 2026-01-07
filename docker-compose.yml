@@ -15,7 +15,7 @@ services:
     volumes:
       # Mount credentials file
       - ./credentials.json:/app/credentials.json:ro
-      # Mount output directory for reports
-      - ./output:/app/output
+      # Mount facilities config
+      - ./facilities_config.json:/app/facilities_config.json:ro
     environment:
       - TZ=Europe/Moscow

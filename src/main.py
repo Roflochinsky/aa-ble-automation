@@ -6,6 +6,7 @@
 
 import argparse
 import sys
+import time
 from datetime import date, datetime
 from typing import Optional, List
 
@@ -18,6 +19,10 @@ from src.clients.telegram import TelegramLogger
 from src.processing.loader import DataLoader
 from src.processing.processor import DataProcessor
 from src.reports.svg_generator import SVGTimelineGenerator, generate_report_filename
+
+# Тайминги ожидания перед следующим запуском (в секундах)
+SLEEP_ON_SUCCESS = 16 * 60 * 60  # 16 часов при успехе
+SLEEP_ON_FAILURE = 3 * 60 * 60   # 3 часа при неудаче
 
 
 class AABLEReportOrchestrator:
@@ -116,10 +121,18 @@ class AABLEReportOrchestrator:
                     success_count += 1
             
             # Итог
-            self.logger.info(
-                f"✅ Обработка завершена\n"
-                f"Успешно: {success_count}/{len(facilities_to_process)} площадок"
-            )
+            if success_count > 0:
+                self.logger.info(
+                    f"✅ Обработка завершена\n"
+                    f"Успешно: {success_count}/{len(facilities_to_process)} площадок\n"
+                    f"Следующий запуск через 16 часов"
+                )
+            else:
+                self.logger.warning(
+                    f"⚠️ Обработка завершена\n"
+                    f"Успешно: 0/{len(facilities_to_process)} площадок\n"
+                    f"Следующий запуск через 3 часа"
+                )
             
             return success_count > 0
             
@@ -360,6 +373,14 @@ def main():
         '--config', type=str, default='facilities_config.json',
         help='Путь к JSON-конфигурации площадок'
     )
+    parser.add_argument(
+        '--once', action='store_true',
+        help='Выполнить один раз без ожидания (для отладки)'
+    )
+    parser.add_argument(
+        '--diagnose', action='store_true',
+        help='Режим диагностики: показать все файлы в папках без фильтрации по дате'
+    )
     
     args = parser.parse_args()
     
@@ -392,6 +413,11 @@ def main():
     # Загружаем конфигурацию
     config = ConfigManager.load(env_path=args.env, facilities_config_path=args.config)
     
+    # Режим диагностики
+    if args.diagnose:
+        run_diagnostics(config)
+        sys.exit(0)
+    
     # Запускаем оркестратор
     orchestrator = AABLEReportOrchestrator(config)
     success = orchestrator.run(
@@ -400,7 +426,58 @@ def main():
         facilities=args.facilities
     )
     
+    # Если --once, выходим сразу
+    if args.once:
+        sys.exit(0 if success else 1)
+    
+    # Иначе ждём перед следующим запуском (для Docker restart)
+    sleep_time = SLEEP_ON_SUCCESS if success else SLEEP_ON_FAILURE
+    hours = sleep_time // 3600
+    print(f"Ожидание {hours} часов перед следующим запуском...")
+    time.sleep(sleep_time)
+    
     sys.exit(0 if success else 1)
+
+
+def run_diagnostics(config: ConfigManager):
+    """Режим диагностики — показывает все файлы в папках."""
+    print("=" * 60)
+    print("ДИАГНОСТИКА ДОСТУПА К GOOGLE DRIVE")
+    print("=" * 60)
+    
+    gdrive = GoogleDriveClient(config.google_credentials_path)
+    
+    try:
+        gdrive.authenticate()
+        print("✅ Аутентификация успешна")
+    except Exception as e:
+        print(f"❌ Ошибка аутентификации: {e}")
+        return
+    
+    for facility in config.get_enabled_facilities():
+        print(f"\n📁 {facility.name}")
+        print(f"   Folder ID: {facility.input_folder_id}")
+        
+        try:
+            # Получаем ВСЕ файлы без фильтрации по дате
+            files = gdrive.list_files(
+                folder_id=facility.input_folder_id,
+                date_from=None,
+                date_to=None
+            )
+            
+            if not files:
+                print("   ⚠️ Папка пуста или нет доступа")
+            else:
+                print(f"   Найдено файлов: {len(files)}")
+                for f in files[:10]:  # Показываем первые 10
+                    date_str = f['file_date'].isoformat() if f.get('file_date') else 'NO DATE'
+                    print(f"   - {f['name']} [{date_str}]")
+                if len(files) > 10:
+                    print(f"   ... и ещё {len(files) - 10} файлов")
+                    
+        except Exception as e:
+            print(f"   ❌ Ошибка: {e}")
 
 
 if __name__ == '__main__':
