@@ -504,7 +504,9 @@ def run_diagnostics(config: ConfigManager):
                 response = gdrive._service.files().list(
                     q=query,
                     spaces='drive',
-                    fields='files(id, name, mimeType, trashed)'
+                    fields='files(id, name, mimeType, trashed)',
+                    supportsAllDrives=True,
+                    includeItemsFromAllDrives=True
                 ).execute()
                 all_items = response.get('files', [])
                 

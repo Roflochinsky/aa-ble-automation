@@ -143,7 +143,8 @@ class GoogleDriveClient:
                     'spaces': 'drive',
                     'fields': 'nextPageToken, files(id, name, mimeType)',
                     'pageToken': page_token,
-                    'supportsAllDrives': True  # Поддержка Shared Drives и расшаренных папок
+                    'supportsAllDrives': True,
+                    'includeItemsFromAllDrives': True
                 }
                 
                 # Если указан drive_id, ищем в конкретном Shared Drive
