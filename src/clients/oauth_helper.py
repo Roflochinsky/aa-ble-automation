@@ -66,7 +66,8 @@ def get_oauth_credentials(
                 client_secrets_path, 
                 SCOPES
             )
-            creds = flow.run_local_server(port=0)
+            # prompt='select_account' заставляет Google показать выбор аккаунта
+            creds = flow.run_local_server(port=0, prompt='select_account')
         
         # Сохраняем токен
         with open(token_path, 'w') as token_file:

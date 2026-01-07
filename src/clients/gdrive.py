@@ -165,6 +165,7 @@ class GoogleDriveClient:
                     break
                     
             except HttpError as e:
+                print(f"❌ API Error при доступе к папке {folder_id}: {e.resp.status} - {e.content}")
                 if e.resp.status == 429:  # Rate limit
                     self._handle_rate_limit()
                     continue
