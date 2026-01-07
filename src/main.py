@@ -469,6 +469,11 @@ def run_diagnostics(config: ConfigManager):
         print(f"❌ Ошибка аутентификации: {e}")
         return
     
+    # Проверяем, что сервис инициализирован
+    if gdrive._service is None:
+        print("❌ Сервис Google Drive не инициализирован после аутентификации")
+        return
+    
     # Проверяем метаданные папок напрямую
     print("\n--- Проверка доступа к папкам ---")
     for facility in config.get_enabled_facilities():
