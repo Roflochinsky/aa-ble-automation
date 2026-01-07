@@ -12,12 +12,14 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from src.clients.oauth_helper import get_oauth_credentials
+
 
 class GoogleSheetsClient:
     """Клиент для работы с Google Sheets API.
     
     Обеспечивает:
-    - Аутентификацию через сервисный аккаунт
+    - Аутентификацию через сервисный аккаунт или OAuth2
     - Чтение данных из листов
     - Конвертацию в pandas DataFrame
     - Корректную обработку кириллицы (UTF-8)
@@ -27,18 +29,30 @@ class GoogleSheetsClient:
     MAX_RETRIES = 3
     RETRY_DELAY = 5  # секунд
     
-    def __init__(self, credentials_path: str):
+    def __init__(
+        self, 
+        credentials_path: str, 
+        impersonate_email: Optional[str] = None,
+        use_oauth: bool = False,
+        oauth_token_path: str = 'token.json'
+    ):
         """Инициализация клиента.
         
         Args:
-            credentials_path: Путь к JSON-файлу сервисного аккаунта
+            credentials_path: Путь к JSON-файлу (service account или OAuth client secrets)
+            impersonate_email: Email пользователя для impersonation (только для service account)
+            use_oauth: Использовать OAuth2 вместо service account
+            oauth_token_path: Путь к файлу с OAuth токеном
         """
         self.credentials_path = credentials_path
+        self.impersonate_email = impersonate_email
+        self.use_oauth = use_oauth
+        self.oauth_token_path = oauth_token_path
         self._service = None
         self._credentials = None
     
     def authenticate(self) -> bool:
-        """Аутентификация через сервисный аккаунт.
+        """Аутентификация через сервисный аккаунт или OAuth2.
         
         Returns:
             True если аутентификация успешна
@@ -50,10 +64,25 @@ class GoogleSheetsClient:
         
         for attempt in range(1, self.MAX_RETRIES + 1):
             try:
-                self._credentials = service_account.Credentials.from_service_account_file(
-                    self.credentials_path,
-                    scopes=self.SCOPES
-                )
+                if self.use_oauth:
+                    # OAuth2 авторизация
+                    self._credentials = get_oauth_credentials(
+                        client_secrets_path=self.credentials_path,
+                        token_path=self.oauth_token_path
+                    )
+                    if not self._credentials:
+                        raise Exception("OAuth2 авторизация не удалась")
+                else:
+                    # Service Account
+                    self._credentials = service_account.Credentials.from_service_account_file(
+                        self.credentials_path,
+                        scopes=self.SCOPES
+                    )
+                    
+                    # Domain-wide delegation
+                    if self.impersonate_email:
+                        self._credentials = self._credentials.with_subject(self.impersonate_email)
+                
                 self._service = build('sheets', 'v4', credentials=self._credentials)
                 return True
             except Exception as e:

@@ -49,8 +49,18 @@ class AABLEReportOrchestrator:
         )
         
         # Google API клиенты
-        self.gdrive = GoogleDriveClient(config.google_credentials_path)
-        self.gsheets = GoogleSheetsClient(config.google_credentials_path)
+        self.gdrive = GoogleDriveClient(
+            config.google_credentials_path,
+            impersonate_email=config.google_impersonate_email or None,
+            use_oauth=config.google_use_oauth,
+            oauth_token_path=config.google_oauth_token_path
+        )
+        self.gsheets = GoogleSheetsClient(
+            config.google_credentials_path,
+            impersonate_email=config.google_impersonate_email or None,
+            use_oauth=config.google_use_oauth,
+            oauth_token_path=config.google_oauth_token_path
+        )
         
         # Загрузчик данных
         self.data_loader = DataLoader(
@@ -445,7 +455,12 @@ def run_diagnostics(config: ConfigManager):
     print("ДИАГНОСТИКА ДОСТУПА К GOOGLE DRIVE")
     print("=" * 60)
     
-    gdrive = GoogleDriveClient(config.google_credentials_path)
+    gdrive = GoogleDriveClient(
+        config.google_credentials_path,
+        impersonate_email=config.google_impersonate_email or None,
+        use_oauth=config.google_use_oauth,
+        oauth_token_path=config.google_oauth_token_path
+    )
     
     try:
         gdrive.authenticate()
@@ -454,12 +469,21 @@ def run_diagnostics(config: ConfigManager):
         print(f"❌ Ошибка аутентификации: {e}")
         return
     
+    # Проверяем метаданные папок напрямую
+    print("\n--- Проверка доступа к папкам ---")
     for facility in config.get_enabled_facilities():
         print(f"\n📁 {facility.name}")
         print(f"   Folder ID: {facility.input_folder_id}")
         
         try:
-            # Получаем ВСЕ файлы без фильтрации по дате
+            # Сначала проверим, можем ли получить метаданные самой папки
+            folder_meta = gdrive._service.files().get(
+                fileId=facility.input_folder_id,
+                fields='id, name, mimeType'
+            ).execute()
+            print(f"   ✅ Папка доступна: {folder_meta.get('name')}")
+            
+            # Теперь получаем файлы
             files = gdrive.list_files(
                 folder_id=facility.input_folder_id,
                 date_from=None,
@@ -467,17 +491,38 @@ def run_diagnostics(config: ConfigManager):
             )
             
             if not files:
-                print("   ⚠️ Папка пуста или нет доступа")
+                # Попробуем получить ВСЕ содержимое без фильтров
+                query = f"'{facility.input_folder_id}' in parents"
+                response = gdrive._service.files().list(
+                    q=query,
+                    spaces='drive',
+                    fields='files(id, name, mimeType, trashed)'
+                ).execute()
+                all_items = response.get('files', [])
+                
+                if all_items:
+                    print(f"   Найдено элементов (включая trashed): {len(all_items)}")
+                    for item in all_items[:5]:
+                        trashed = "🗑️" if item.get('trashed') else ""
+                        print(f"   - {item['name']} [{item['mimeType']}] {trashed}")
+                else:
+                    print("   ⚠️ Папка действительно пуста")
             else:
                 print(f"   Найдено файлов: {len(files)}")
-                for f in files[:10]:  # Показываем первые 10
+                for f in files[:10]:
                     date_str = f['file_date'].isoformat() if f.get('file_date') else 'NO DATE'
                     print(f"   - {f['name']} [{date_str}]")
                 if len(files) > 10:
                     print(f"   ... и ещё {len(files) - 10} файлов")
                     
         except Exception as e:
-            print(f"   ❌ Ошибка: {e}")
+            error_msg = str(e)
+            if '404' in error_msg:
+                print(f"   ❌ Папка не найдена или нет доступа (404)")
+            elif '403' in error_msg:
+                print(f"   ❌ Доступ запрещён (403) — проверьте права")
+            else:
+                print(f"   ❌ Ошибка: {e}")
 
 
 if __name__ == '__main__':

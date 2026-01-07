@@ -1,6 +1,8 @@
 # Секретные файлы (НЕ КОММИТИТЬ!)
 .env
 credentials.json
+client_secrets.json
+token.json
 facilities_config.json
 
 # Python

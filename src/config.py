@@ -33,6 +33,9 @@ class ConfigManager:
     
     # Google Cloud
     google_credentials_path: str
+    google_impersonate_email: str  # Email для domain-wide delegation
+    google_use_oauth: bool  # Использовать OAuth2 вместо service account
+    google_oauth_token_path: str  # Путь к файлу с OAuth токеном
     
     # Google Sheets (общие справочники)
     gsheets_ble_journal_id: str
@@ -94,6 +97,14 @@ class ConfigManager:
         google_credentials_path = get_param(
             'GOOGLE_CREDENTIALS_PATH', 'google_credentials_path', 'credentials.json'
         )
+        google_impersonate_email = get_param(
+            'GOOGLE_IMPERSONATE_EMAIL', 'google_impersonate_email', ''
+        )
+        google_use_oauth_str = get_param('GOOGLE_USE_OAUTH', 'google_use_oauth', 'false')
+        google_use_oauth = google_use_oauth_str.lower() in ('true', '1', 'yes')
+        google_oauth_token_path = get_param(
+            'GOOGLE_OAUTH_TOKEN_PATH', 'google_oauth_token_path', 'token.json'
+        )
         telegram_bot_token = get_param('TELEGRAM_BOT_TOKEN', 'telegram_bot_token')
         telegram_chat_id = get_param('TELEGRAM_CHAT_ID', 'telegram_chat_id')
         gsheets_ble_journal_id = get_param('GSHEETS_BLE_JOURNAL_ID', 'gsheets_ble_journal_id')
@@ -124,6 +135,9 @@ class ConfigManager:
         
         config = cls(
             google_credentials_path=google_credentials_path,
+            google_impersonate_email=google_impersonate_email,
+            google_use_oauth=google_use_oauth,
+            google_oauth_token_path=google_oauth_token_path,
             telegram_bot_token=telegram_bot_token,
             telegram_chat_id=telegram_chat_id,
             gsheets_ble_journal_id=gsheets_ble_journal_id,
