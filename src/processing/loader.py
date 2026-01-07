@@ -102,6 +102,7 @@ class DataLoader:
                     df = self._read_excel_second_sheet(content, file_name)
                     
                     if df is not None and not df.empty:
+                        self.logger.info(f"Columns in {file_name}: {list(df.columns)}")
                         # Добавляем информацию о файле
                         df['_source_file'] = file_name
                         df['_file_date'] = file_date

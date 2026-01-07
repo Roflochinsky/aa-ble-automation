@@ -50,6 +50,7 @@ COLUMN_MAPPING = {
     'ble-метка': 'ble_tag',
     'ble метка': 'ble_tag',
     'метка': 'ble_tag',
+    'metka': 'ble_tag',
     'ble_tag': 'ble_tag',
     'tag': 'ble_tag',
     
