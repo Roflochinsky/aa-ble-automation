@@ -218,7 +218,16 @@ class DataLoader:
                 except (ValueError, TypeError):
                     tag = str(raw_tag).strip()
 
-                description = str(row[1]).strip() if row[1] else ''
+                # Legacy script used column index 3 (4th column) for description
+                description = ''
+                if len(row) > 3 and row[3]:
+                    description = str(row[3]).strip()
+                elif len(row) > 1 and row[1]:
+                    # Fallback to column 1 if column 3 is missing/empty, 
+                    # but check if it's not just a duplicate of tag
+                    val = str(row[1]).strip()
+                    if val != tag:
+                         description = val
                 
                 if tag and description:
                     tag_desc_map[tag] = description
