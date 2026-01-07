@@ -517,12 +517,14 @@ def run_diagnostics(config: ConfigManager):
                     
         except Exception as e:
             error_msg = str(e)
+            print(f"   ❌ Ошибка: {error_msg}")
             if '404' in error_msg:
-                print(f"   ❌ Папка не найдена или нет доступа (404)")
+                print(f"      → Папка не найдена или нет доступа")
             elif '403' in error_msg:
-                print(f"   ❌ Доступ запрещён (403) — проверьте права")
-            else:
-                print(f"   ❌ Ошибка: {e}")
+                print(f"      → Доступ запрещён — проверьте права")
+            # Выводим полный traceback для отладки
+            import traceback
+            print(f"      Traceback: {traceback.format_exc()}")
 
 
 if __name__ == '__main__':
