@@ -208,7 +208,16 @@ class DataLoader:
                     continue
                 
                 # Первая колонка - номер метки, вторая - описание
-                tag = str(row[0]).strip()
+                raw_tag = row[0]
+                try:
+                    # Если это число (float/int), приводим к int, чтобы убрать .0
+                    if isinstance(raw_tag, (int, float)):
+                        tag = str(int(raw_tag)).strip()
+                    else:
+                        tag = str(raw_tag).strip()
+                except (ValueError, TypeError):
+                    tag = str(raw_tag).strip()
+
                 description = str(row[1]).strip() if row[1] else ''
                 
                 if tag and description:
