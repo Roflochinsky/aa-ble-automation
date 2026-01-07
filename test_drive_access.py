@@ -54,3 +54,17 @@ try:
 except HttpError as e:
     print(f"❌ HTTP Error: {e.resp.status}")
     print(f"   Content: {e.content.decode('utf-8')}")
+
+# Пробуем получить список Shared Drives
+print("\nПробуем получить список Shared Drives:")
+try:
+    result = service.drives().list(pageSize=10).execute()
+    drives = result.get('drives', [])
+    print(f"✅ Найдено Shared Drives: {len(drives)}")
+    for drive in drives:
+        print(f"   - {drive['name']} (ID: {drive['id']})")
+except HttpError as e:
+    print(f"❌ HTTP Error: {e.resp.status}")
+    print(f"   Content: {e.content.decode('utf-8')}")
+except Exception as e:
+    print(f"❌ Error: {type(e).__name__}: {e}")

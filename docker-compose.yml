@@ -13,6 +13,9 @@ services:
     env_file:
       - .env
     volumes:
+      # Mount source code
+      - ./src:/app/src:ro
+      - ./test_drive_access.py:/app/test_drive_access.py:ro
       # Mount OAuth credentials
       - ./client_secrets.json:/app/client_secrets.json:ro
       - ./token.json:/app/token.json:rw
