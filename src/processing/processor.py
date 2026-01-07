@@ -95,10 +95,23 @@ class DataProcessor:
         """
         self.logger = logger
     
+    # Стандартные колонки после нормализации
+    STANDARD_COLUMNS = ['tn_number', 'shift_day', 'ble_tag', 'zone_id', 'time_only']
+
+    # Позиции колонок по умолчанию (как в legacy скрипте)
+    DEFAULT_POSITIONS = {
+        'tn_number': 0,
+        'shift_day': 3,
+        'ble_tag': 10,
+        'zone_id': 11,
+        'time_only': 15
+    }
+
     def normalize_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         """Нормализация названий колонок.
         
         Requirement: 7.1 - извлечение колонок ТН, День смены, BLE-метка, Зона, Время на объекте
+        Поддерживает поиск по имени и фоллбэк на позицию (как в legacy).
         
         Args:
             df: Исходный DataFrame с произвольными названиями колонок
@@ -107,32 +120,40 @@ class DataProcessor:
             DataFrame со стандартизированными колонками
         """
         if df.empty:
-            return pd.DataFrame(columns=STANDARD_COLUMNS)
+            return pd.DataFrame(columns=self.STANDARD_COLUMNS)
         
-        result = df.copy()
+        out = pd.DataFrame()
         
-        # Создаём маппинг текущих колонок к стандартным
-        column_renames = {}
+        # Вспомогательная функция для поиска колонки по имени
+        def find_col_by_mapping(std_col_name: str) -> Optional[str]:
+            for col in df.columns:
+                col_lower = str(col).lower().strip()
+                # Проверка по словарю
+                if COLUMN_MAPPING.get(col_lower) == std_col_name:
+                    return col
+            return None
+
+        # Формируем стандартные колонки
+        for std_col in self.STANDARD_COLUMNS:
+            # 1. Ищем по имени
+            source_col = find_col_by_mapping(std_col)
+            
+            if source_col is not None:
+                out[std_col] = df[source_col]
+            else:
+                # 2. Фоллбэк на позицию
+                pos = self.DEFAULT_POSITIONS.get(std_col)
+                if pos is not None and pos < df.shape[1]:
+                    out[std_col] = df.iloc[:, pos]
+                else:
+                    out[std_col] = None
         
-        for col in result.columns:
-            col_lower = str(col).lower().strip()
-            if col_lower in COLUMN_MAPPING:
-                standard_name = COLUMN_MAPPING[col_lower]
-                column_renames[col] = standard_name
-        
-        # Переименовываем колонки
-        result = result.rename(columns=column_renames)
-        
-        # Оставляем только стандартные колонки, которые есть в данных
-        existing_standard_cols = [col for col in STANDARD_COLUMNS if col in result.columns]
-        
-        # Добавляем отсутствующие колонки с None
-        for col in STANDARD_COLUMNS:
-            if col not in result.columns:
-                result[col] = None
-        
-        # Возвращаем только стандартные колонки в правильном порядке
-        return result[STANDARD_COLUMNS]
+        # Сохраняем служебные колонки, если они есть
+        for meta_col in ['_source_file', '_file_date']:
+            if meta_col in df.columns:
+                out[meta_col] = df[meta_col]
+                
+        return out
 
     @staticmethod
     def parse_time(value: Union[str, float, time, datetime, None]) -> Optional[time]:
