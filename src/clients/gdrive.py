@@ -111,7 +111,8 @@ class GoogleDriveClient:
         folder_id: str, 
         name_pattern: Optional[str] = None,
         date_from: Optional[date] = None,
-        date_to: Optional[date] = None
+        date_to: Optional[date] = None,
+        drive_id: Optional[str] = None
     ) -> list[dict]:
         """Получение списка файлов в папке.
         
@@ -120,6 +121,7 @@ class GoogleDriveClient:
             name_pattern: Паттерн для фильтрации по имени (опционально)
             date_from: Начальная дата для фильтрации (опционально)
             date_to: Конечная дата для фильтрации (опционально)
+            drive_id: ID Shared Drive (опционально, для поиска в Shared Drives)
             
         Returns:
             Список словарей с информацией о файлах:
@@ -136,12 +138,23 @@ class GoogleDriveClient:
         
         while True:
             try:
-                response = self._service.files().list(
-                    q=query,
-                    spaces='drive',
-                    fields='nextPageToken, files(id, name, mimeType)',
-                    pageToken=page_token
-                ).execute()
+                list_kwargs = {
+                    'q': query,
+                    'spaces': 'drive',
+                    'fields': 'nextPageToken, files(id, name, mimeType)',
+                    'pageToken': page_token,
+                    'supportsAllDrives': True  # Поддержка Shared Drives и расшаренных папок
+                }
+                
+                # Если указан drive_id, ищем в конкретном Shared Drive
+                if drive_id:
+                    list_kwargs['corpora'] = 'drive'
+                    list_kwargs['driveId'] = drive_id
+                else:
+                    # Иначе ищем везде (личный диск + расшаренные папки)
+                    list_kwargs['corpora'] = 'allDrives'
+                
+                response = self._service.files().list(**list_kwargs).execute()
                 
                 for file_info in response.get('files', []):
                     file_date = self._extract_date_from_filename(file_info['name'])

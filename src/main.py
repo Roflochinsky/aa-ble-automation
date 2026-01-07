@@ -209,7 +209,8 @@ class AABLEReportOrchestrator:
             raw_data = self.data_loader.load_aable_files(
                 folder_id=facility.input_folder_id,
                 date_from=date_from,
-                date_to=date_to
+                date_to=date_to,
+                drive_id=facility.drive_id
             )
             
             if raw_data is None or raw_data.empty:
@@ -492,7 +493,8 @@ def run_diagnostics(config: ConfigManager):
             files = gdrive.list_files(
                 folder_id=facility.input_folder_id,
                 date_from=None,
-                date_to=None
+                date_to=None,
+                drive_id=facility.drive_id
             )
             
             if not files:

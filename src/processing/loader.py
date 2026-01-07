@@ -50,7 +50,8 @@ class DataLoader:
         self, 
         folder_id: str, 
         date_from: Optional[date] = None, 
-        date_to: Optional[date] = None
+        date_to: Optional[date] = None,
+        drive_id: Optional[str] = None
     ) -> pd.DataFrame:
         """Загрузка файлов AA_BLE из Google Drive.
         
@@ -63,6 +64,7 @@ class DataLoader:
             folder_id: ID папки Google Drive с файлами AA_BLE
             date_from: Начальная дата для фильтрации (включительно)
             date_to: Конечная дата для фильтрации (включительно)
+            drive_id: ID Shared Drive (опционально)
             
         Returns:
             DataFrame с объединёнными данными из всех файлов
@@ -72,7 +74,8 @@ class DataLoader:
             files = self.gdrive.list_files(
                 folder_id=folder_id,
                 date_from=date_from,
-                date_to=date_to
+                date_to=date_to,
+                drive_id=drive_id
             )
             
             if not files:

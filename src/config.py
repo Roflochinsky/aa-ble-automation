@@ -20,6 +20,7 @@ class FacilityConfig:
     name: str
     input_folder_id: str
     enabled: bool = True
+    drive_id: Optional[str] = None  # ID Shared Drive (для поиска в корпоративных дисках)
     
     def __post_init__(self):
         """Валидация после инициализации."""
