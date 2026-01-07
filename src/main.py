@@ -485,7 +485,8 @@ def run_diagnostics(config: ConfigManager):
             # Сначала проверим, можем ли получить метаданные самой папки
             folder_meta = gdrive._service.files().get(
                 fileId=facility.input_folder_id,
-                fields='id, name, mimeType'
+                fields='id, name, mimeType',
+                supportsAllDrives=True
             ).execute()
             print(f"   ✅ Папка доступна: {folder_meta.get('name')}")
             
