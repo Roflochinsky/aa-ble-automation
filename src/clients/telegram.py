@@ -139,12 +139,12 @@ class TelegramLogger:
             time.sleep(0.5)
     
     def error(self, message: str, exception: Optional[Exception] = None) -> None:
-        """Отправка сообщения об ошибке."""
+        """Отправка краткого сообщения об ошибке."""
         error_text = f"❌ ERROR\n{message}"
-        
         if exception:
-            tb = traceback.format_exception(type(exception), exception, exception.__traceback__)
-            error_text += f"\n\nStack trace:\n{''.join(tb)}"
+            error_text += f"\n({type(exception).__name__}: {str(exception)})"
+        
+        error_text += "\n\nℹ️ Используйте /logs для получения подробного лога."
         
         parts = self._split_message(error_text)
         for part in parts:

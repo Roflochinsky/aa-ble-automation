@@ -1,17 +1,19 @@
 # AA_BLE Automation - Main Orchestrator
 """
 Главный оркестратор генерации отчётов AA_BLE.
-Поддерживает обработку множества площадок.
+Поддерживает автоматический запуск в 08:00 и интерактивные команды в Telegram.
 """
 
 import argparse
+import logging
 import sys
 import time
-from datetime import date, datetime
+import threading
+from datetime import date, datetime, timedelta
 from typing import Optional, List
 
-import pandas as pd
-
+import schedule
+import telebot
 from src.config import ConfigManager, FacilityConfig
 from src.clients.gdrive import GoogleDriveClient
 from src.clients.gsheets import GoogleSheetsClient
@@ -19,36 +21,36 @@ from src.clients.telegram import TelegramLogger
 from src.processing.loader import DataLoader
 from src.processing.processor import DataProcessor
 from src.reports.svg_generator import SVGTimelineGenerator, generate_report_filename
+from src.utils.log_capturer import memory_handler
 
-# Тайминги ожидания перед следующим запуском (в секундах)
-SLEEP_ON_SUCCESS = 16 * 60 * 60  # 16 часов при успехе
+# Настройка базового логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        memory_handler  # Наш перехватчик для /logs
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# Настройки планировщика
+TARGET_HOUR = "08:00"
 SLEEP_ON_FAILURE = 3 * 60 * 60   # 3 часа при неудаче
+
+# Глобальный флаг состояния
+processing_lock = threading.Lock()
 
 
 class AABLEReportOrchestrator:
-    """
-    Главный оркестратор генерации отчётов AA_BLE.
-    
-    Обрабатывает множество площадок, для каждой:
-    - Загружает файлы AA_BLE из соответствующей папки GDrive
-    - Генерирует SVG-таймлайны
-    - Выгружает HTML-отчёт в выходную папку
-    """
+    """Главный оркестратор генерации отчётов AA_BLE."""
     
     def __init__(self, config: ConfigManager):
-        """
-        Args:
-            config: Конфигурация приложения
-        """
         self.config = config
-        
-        # Telegram-логгер
         self.logger = TelegramLogger(
             bot_token=config.telegram_bot_token,
             chat_id=config.telegram_chat_id
         )
-        
-        # Google API клиенты
         self.gdrive = GoogleDriveClient(
             config.google_credentials_path,
             impersonate_email=config.google_impersonate_email or None,
@@ -61,40 +63,23 @@ class AABLEReportOrchestrator:
             use_oauth=config.google_use_oauth,
             oauth_token_path=config.google_oauth_token_path
         )
-        
-        # Загрузчик данных
-        self.data_loader = DataLoader(
-            gdrive=self.gdrive,
-            gsheets=self.gsheets,
-            logger=self.logger
-        )
-        
-        # Процессор данных
+        self.data_loader = DataLoader(gdrive=self.gdrive, gsheets=self.gsheets, logger=self.logger)
         self.processor = DataProcessor(logger=self.logger)
         
-        # Кэш справочников (загружаются один раз)
         self._tag_desc_map: Optional[dict] = None
         self._area_map: Optional[dict] = None
         self._fio_map: Optional[dict] = None
 
-    def run(
-        self, 
-        date_from: Optional[date] = None, 
-        date_to: Optional[date] = None,
-        facilities: Optional[List[str]] = None
-    ) -> bool:
-        """
-        Запуск генерации отчётов для всех активных площадок.
-        
-        Args:
-            date_from: Начальная дата (по умолчанию — сегодня)
-            date_to: Конечная дата (по умолчанию — сегодня)
-            facilities: Список имён площадок для обработки (None = все активные)
+    def run(self, date_from=None, date_to=None, facilities=None) -> bool:
+        """Запуск генерации отчётов."""
+        if not processing_lock.acquire(blocking=False):
+            logger.warning("Попытка запуска при уже работающем процессе")
+            return False
             
-        Returns:
-            True если хотя бы один отчёт создан успешно
-        """
         try:
+            # Очищаем логи перед новым запуском
+            memory_handler.clear()
+            
             # Даты по умолчанию
             if date_from is None and date_to is None:
                 date_from = date.today()
@@ -104,437 +89,222 @@ class AABLEReportOrchestrator:
             elif date_to is None:
                 date_to = date_from
             
-            self.logger.info(
-                f"🚀 Запуск AA_BLE Automation\n"
-                f"Период: {date_from.strftime('%d.%m.%Y')} — {date_to.strftime('%d.%m.%Y')}"
-            )
+            start_msg = f"🚀 Запуск AA_BLE Automation\nПериод: {date_from.strftime('%d.%m.%Y')} — {date_to.strftime('%d.%m.%Y')}"
+            self.logger.info(start_msg)
+            logger.info(start_msg)
             
-            # Аутентификация
             self._authenticate()
-            
-            # Загрузка справочников (один раз для всех площадок)
             self._load_reference_data()
             
-            # Определяем площадки для обработки
             facilities_to_process = self._get_facilities_to_process(facilities)
-            
             if not facilities_to_process:
                 self.logger.warning("Нет активных площадок для обработки")
                 return False
             
-            self.logger.info(f"Площадок для обработки: {len(facilities_to_process)}")
-            
-            # Обрабатываем каждую площадку
             success_count = 0
-            for facility in facilities_to_process:
-                if self._process_facility(facility, date_from, date_to):
-                    success_count += 1
+            all_segments_list = []
             
-            # Итог
-            if success_count > 0:
-                self.logger.info(
-                    f"✅ Обработка завершена\n"
-                    f"Успешно: {success_count}/{len(facilities_to_process)} площадок\n"
-                    f"Следующий запуск через 16 часов"
-                )
-            else:
-                self.logger.warning(
-                    f"⚠️ Обработка завершена\n"
-                    f"Успешно: 0/{len(facilities_to_process)} площадок\n"
-                    f"Следующий запуск через 3 часа"
-                )
+            for facility in facilities_to_process:
+                # Передаем список для накопления сегментов
+                facility_segments = self._process_facility(facility, date_from, date_to)
+                if facility_segments is not None:
+                    success_count += 1
+                    all_segments_list.append(facility_segments)
+            
+            # Генерация сводных отчетов (Cleaners, Autstaff)
+            if all_segments_list:
+                full_df = pd.concat(all_segments_list, ignore_index=True)
+                self._generate_aggregated_reports(full_df)
+            
+            final_msg = (
+                f"✅ Обработка завершена\n"
+                f"Успешно: {success_count}/{len(facilities_to_process)} площадок\n"
+                f"Период: {date_from.strftime('%d.%m.%Y')} — {date_to.strftime('%d.%m.%Y')}"
+            )
+            self.logger.info(final_msg)
+            logger.info(final_msg)
             
             return success_count > 0
             
         except Exception as e:
             self.logger.error(f"Критическая ошибка: {str(e)}", exception=e)
             return False
-    
+        finally:
+            processing_lock.release()
+
     def _authenticate(self) -> None:
-        """Аутентификация в Google API."""
         self.gdrive.authenticate()
         self.gsheets.authenticate()
     
     def _load_reference_data(self) -> None:
-        """Загрузка справочных данных (Журнал BLE, Привязка людей)."""
-        self.logger.info("Загрузка справочников...")
-        
         self._tag_desc_map = self.data_loader.load_ble_journal(
-            spreadsheet_id=self.config.gsheets_ble_journal_id,
-            sheet_name=self.config.gsheets_ble_journal_sheet
+            self.config.gsheets_ble_journal_id, self.config.gsheets_ble_journal_sheet
         )
-        
         self._area_map, self._fio_map = self.data_loader.load_people_mapping(
-            spreadsheet_id=self.config.gsheets_people_mapping_id,
-            sheet_name=self.config.gsheets_people_mapping_sheet
+            self.config.gsheets_people_mapping_id, self.config.gsheets_people_mapping_sheet
         )
-        
-        self.logger.info(
-            f"Справочники загружены: "
-            f"меток={len(self._tag_desc_map)}, "
-            f"сотрудников={len(self._fio_map)}"
-        )
+
+    def _get_facilities_to_process(self, names: Optional[List[str]]) -> List[FacilityConfig]:
+        enabled = self.config.get_enabled_facilities()
+        if names is None: return enabled
+        return [f for f in enabled if f.name in names]
     
-    def _get_facilities_to_process(self, facility_names: Optional[List[str]]) -> List[FacilityConfig]:
-        """Получение списка площадок для обработки."""
-        enabled_facilities = self.config.get_enabled_facilities()
-        
-        if facility_names is None:
-            return enabled_facilities
-        
-        # Фильтруем по именам
-        return [f for f in enabled_facilities if f.name in facility_names]
-    
-    def _process_facility(
-        self, 
-        facility: FacilityConfig, 
-        date_from: date, 
-        date_to: date
-    ) -> bool:
-        """
-        Обработка одной площадки.
-        
-        Args:
-            facility: Конфигурация площадки
-            date_from: Начальная дата
-            date_to: Конечная дата
-            
-        Returns:
-            True если отчёт создан успешно
-        """
+    def _process_facility(self, facility, date_from, date_to) -> Optional[pd.DataFrame]:
+        """Обрабатывает площадку и возвращает DataFrame с сегментами (или None)."""
         try:
-            self.logger.info(f"📍 Обработка площадки: {facility.name}")
-            
-            # Загрузка файлов AA_BLE для этой площадки
             raw_data = self.data_loader.load_aable_files(
                 folder_id=facility.input_folder_id,
                 date_from=date_from,
                 date_to=date_to,
                 drive_id=facility.drive_id
             )
+            if raw_data is None or raw_data.empty: return None
             
-            if raw_data is None or raw_data.empty:
-                self.logger.warning(f"[{facility.name}] Нет данных за период")
-                return False
+            segments = self.processor.process_full(raw_data, self._area_map, self._fio_map)
+            if segments.empty: return None
             
-            # Обработка данных
-            segments = self.processor.process_full(
-                raw_data, 
-                self._area_map, 
-                self._fio_map
-            )
-            
-            if segments.empty:
-                self.logger.warning(f"[{facility.name}] После обработки нет данных")
-                return False
-            
-            # Группируем по датам и генерируем отчёты
             reports_created = 0
-            for report_date, date_segments in self._group_by_date(segments).items():
-                if self._generate_and_upload_report(facility, report_date, date_segments):
+            for r_date, d_segments in self._group_by_date(segments).items():
+                if self._generate_and_upload_report(facility.name, r_date, d_segments):
                     reports_created += 1
             
-            if reports_created > 0:
-                self.logger.info(f"[{facility.name}] Создано отчётов: {reports_created}")
-                return True
-            
-            return False
-            
+            return segments if reports_created > 0 else None
         except Exception as e:
-            self.logger.error(f"[{facility.name}] Ошибка: {str(e)}", exception=e)
-            return False
-    
-    def _group_by_date(self, segments: pd.DataFrame) -> dict[date, pd.DataFrame]:
-        """Группировка сегментов по датам."""
-        if segments.empty or 'date' not in segments.columns:
-            return {}
+            logger.error(f"[{facility.name}] Ошибка: {e}")
+            return None
+
+    def _generate_aggregated_reports(self, full_df: pd.DataFrame) -> None:
+        """Генерация сводных отчетов по ключевым словам в ФИО."""
+        logger.info("Генерация сводных отчетов (Cleaners, Autstaff)...")
         
-        result = {}
-        for report_date, group in segments.groupby('date'):
-            if isinstance(report_date, datetime):
-                report_date = report_date.date()
-            if isinstance(report_date, date):
-                result[report_date] = group.reset_index(drop=True)
+        # Определяем фильтры
+        # Cleaners: содержит "клинер"
+        cleaners_mask = full_df['employee'].astype(str).str.lower().str.contains('клинер', na=False)
         
-        return result
-    
-    def _generate_and_upload_report(
-        self, 
-        facility: FacilityConfig, 
-        report_date: date, 
-        segments: pd.DataFrame
-    ) -> bool:
-        """
-        Генерация и отправка HTML-отчёта через Telegram.
+        # Autstaff: содержит "аутстаф" или "аутсорс"
+        autstaff_mask = full_df['employee'].astype(str).str.lower().str.contains('аутстаф|аутсорс', na=False, regex=True)
         
-        Args:
-            facility: Конфигурация площадки
-            report_date: Дата отчёта
-            segments: DataFrame с сегментами
-            
-        Returns:
-            True если успешно
-        """
+        groups = [
+            ('CLEANERS', cleaners_mask),
+            ('AUTSTAFF', autstaff_mask)
+        ]
+        
+        for name, mask in groups:
+            filtered_df = full_df[mask]
+            if filtered_df.empty:
+                continue
+                
+            # Группируем по датам и отправляем
+            for r_date, d_segments in self._group_by_date(filtered_df).items():
+                self._generate_and_upload_report(name, r_date, d_segments)
+
+    def _group_by_date(self, segments: pd.DataFrame) -> dict:
+        if segments.empty or 'date' not in segments.columns: return {}
+        res = {}
+        for r_date, group in segments.groupby('date'):
+            if isinstance(r_date, datetime): r_date = r_date.date()
+            res[r_date] = group.reset_index(drop=True)
+        return res
+
+    def _generate_and_upload_report(self, site_name: str, report_date: date, segments: pd.DataFrame) -> bool:
+        """Генерация и отправка отчета (универсальный метод)."""
         try:
-            # Генератор SVG-таймлайнов
             generator = SVGTimelineGenerator(tag_desc_map=self._tag_desc_map)
+            html = generator.generate_combined_html(segments, site_name, report_date)
+            if not html: return False
             
-            # Генерация HTML
-            html_content = generator.generate_combined_html(
-                segments_df=segments,
-                site_name=facility.name,
-                report_date=report_date
-            )
-            
-            if not html_content:
-                return False
-            
-            # Имя файла
-            filename = generate_report_filename(facility.name, report_date)
-            
-            # Отправка через Telegram
-            caption = f"📊 {facility.name} — {report_date.strftime('%d.%m.%Y')}"
-            success = self.logger.send_document(
-                content=html_content.encode('utf-8'),
-                filename=filename,
-                caption=caption
-            )
-            
-            if success:
-                self.logger.info(f"[{facility.name}] Отчёт отправлен: {filename}")
-            else:
-                # Fallback: сохраняем локально
-                with open(filename, 'w', encoding='utf-8') as f:
-                    f.write(html_content)
-                self.logger.warning(f"[{facility.name}] Telegram недоступен, сохранён локально: {filename}")
-            
-            return True
-            
+            filename = generate_report_filename(site_name, report_date)
+            caption = f"📊 {site_name} — {report_date.strftime('%d.%m.%Y')}"
+            return self.logger.send_document(html.encode('utf-8'), filename, caption)
         except Exception as e:
-            self.logger.error(
-                f"[{facility.name}] Ошибка генерации отчёта за {report_date}: {str(e)}", 
-                exception=e
-            )
+            logger.error(f"Ошибка генерации {site_name}: {e}")
             return False
 
 
 def parse_date(date_str: str) -> date:
-    """Парсинг строки даты (YYYY-MM-DD или DD.MM.YYYY)."""
-    formats = ['%Y-%m-%d', '%d.%m.%Y']
-    for fmt in formats:
-        try:
-            return datetime.strptime(date_str, fmt).date()
-        except ValueError:
-            continue
-    raise ValueError(f"Неизвестный формат даты: {date_str}")
-
-
-def filter_files_by_date_range(
-    files: list[dict],
-    date_from: Optional[date] = None,
-    date_to: Optional[date] = None
-) -> list[dict]:
-    """Фильтрация файлов по диапазону дат (для тестов)."""
-    if not files:
-        return []
-    
-    result = []
-    for file_info in files:
-        file_date = file_info.get('file_date')
-        if file_date is None:
-            if date_from is None and date_to is None:
-                result.append(file_info)
-            continue
-        if date_from is not None and file_date < date_from:
-            continue
-        if date_to is not None and file_date > date_to:
-            continue
-        result.append(file_info)
-    
-    return result
+    for fmt in ['%Y-%m-%d', '%d.%m.%Y']:
+        try: return datetime.strptime(date_str, fmt).date()
+        except ValueError: continue
+    raise ValueError(f"Неизвестный формат: {date_str}")
 
 
 def main():
-    """Точка входа приложения."""
-    parser = argparse.ArgumentParser(
-        description='AA_BLE Report Automation — генерация SVG-таймлайнов'
-    )
-    
-    parser.add_argument(
-        '--date-from', type=str,
-        help='Начальная дата (YYYY-MM-DD или DD.MM.YYYY)'
-    )
-    parser.add_argument(
-        '--date-to', type=str,
-        help='Конечная дата (YYYY-MM-DD или DD.MM.YYYY)'
-    )
-    parser.add_argument(
-        '--date', type=str,
-        help='Конкретная дата (YYYY-MM-DD или DD.MM.YYYY)'
-    )
-    parser.add_argument(
-        '--facilities', type=str, nargs='+',
-        help='Имена площадок для обработки (по умолчанию — все активные)'
-    )
-    parser.add_argument(
-        '--env', type=str, default=None,
-        help='Путь к .env файлу'
-    )
-    parser.add_argument(
-        '--config', type=str, default='facilities_config.json',
-        help='Путь к JSON-конфигурации площадок'
-    )
-    parser.add_argument(
-        '--once', action='store_true',
-        help='Выполнить один раз без ожидания (для отладки)'
-    )
-    parser.add_argument(
-        '--diagnose', action='store_true',
-        help='Режим диагностики: показать все файлы в папках без фильтрации по дате'
-    )
-    
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--date-from', type=str)
+    parser.add_argument('--date-to', type=str)
+    parser.add_argument('--facilities', type=str, nargs='+')
+    parser.add_argument('--env', type=str, default=None)
+    parser.add_argument('--config', type=str, default='facilities_config.json')
+    parser.add_argument('--once', action='store_true')
     args = parser.parse_args()
-    
-    # Парсим даты
-    date_from = None
-    date_to = None
-    
-    if args.date:
-        try:
-            single_date = parse_date(args.date)
-            date_from = single_date
-            date_to = single_date
-        except ValueError as e:
-            print(f"Ошибка: {e}", file=sys.stderr)
-            sys.exit(1)
-    else:
-        if args.date_from:
-            try:
-                date_from = parse_date(args.date_from)
-            except ValueError as e:
-                print(f"Ошибка: {e}", file=sys.stderr)
-                sys.exit(1)
-        if args.date_to:
-            try:
-                date_to = parse_date(args.date_to)
-            except ValueError as e:
-                print(f"Ошибка: {e}", file=sys.stderr)
-                sys.exit(1)
-    
-    # Загружаем конфигурацию
+
     config = ConfigManager.load(env_path=args.env, facilities_config_path=args.config)
-    
-    # Режим диагностики
-    if args.diagnose:
-        run_diagnostics(config)
-        sys.exit(0)
-    
-    # Запускаем оркестратор
     orchestrator = AABLEReportOrchestrator(config)
-    success = orchestrator.run(
-        date_from=date_from, 
-        date_to=date_to,
-        facilities=args.facilities
-    )
-    
-    # Если --once, выходим сразу
+
     if args.once:
-        sys.exit(0 if success else 1)
-    
-    # Иначе ждём перед следующим запуском (для Docker restart)
-    sleep_time = SLEEP_ON_SUCCESS if success else SLEEP_ON_FAILURE
-    hours = sleep_time // 3600
-    print(f"Ожидание {hours} часов перед следующим запуском...")
-    time.sleep(sleep_time)
-    
-    sys.exit(0 if success else 1)
+        df = parse_date(args.date_from) if args.date_from else None
+        dt = parse_date(args.date_to) if args.date_to else None
+        orchestrator.run(date_from=df, date_to=dt, facilities=args.facilities)
+        sys.exit(0)
 
+    # Запуск бота в отдельном потоке
+    bot = telebot.TeleBot(config.telegram_bot_token)
+    
+    @bot.message_handler(commands=['start'])
+    def cmd_start(m):
+        bot.reply_to(m, "🤖 Бот управления AA_BLE готов.\n\nКоманды:\n/makereport [дата] — создать отчет\n/logs — получить логи последнего запуска")
 
-def run_diagnostics(config: ConfigManager):
-    """Режим диагностики — показывает все файлы в папках."""
-    print("=" * 60)
-    print("ДИАГНОСТИКА ДОСТУПА К GOOGLE DRIVE")
-    print("=" * 60)
-    
-    gdrive = GoogleDriveClient(
-        config.google_credentials_path,
-        impersonate_email=config.google_impersonate_email or None,
-        use_oauth=config.google_use_oauth,
-        oauth_token_path=config.google_oauth_token_path
-    )
-    
-    try:
-        gdrive.authenticate()
-        print("✅ Аутентификация успешна")
-    except Exception as e:
-        print(f"❌ Ошибка аутентификации: {e}")
-        return
-    
-    # Проверяем, что сервис инициализирован
-    if gdrive._service is None:
-        print("❌ Сервис Google Drive не инициализирован после аутентификации")
-        return
-    
-    # Проверяем метаданные папок напрямую
-    print("\n--- Проверка доступа к папкам ---")
-    for facility in config.get_enabled_facilities():
-        print(f"\n📁 {facility.name}")
-        print(f"   Folder ID: {facility.input_folder_id}")
-        
+    @bot.message_handler(commands=['makereport'])
+    def cmd_report(m):
+        if processing_lock.locked():
+            bot.reply_to(m, "⚠️ Процесс уже запущен. Подождите окончания.")
+            return
+            
         try:
-            # Сначала проверим, можем ли получить метаданные самой папки
-            folder_meta = gdrive._service.files().get(
-                fileId=facility.input_folder_id,
-                fields='id, name, mimeType',
-                supportsAllDrives=True
-            ).execute()
-            print(f"   ✅ Папка доступна: {folder_meta.get('name')}")
+            text = m.text.split()
+            d_from = None
+            if len(text) > 1:
+                d_from = parse_date(text[1])
             
-            # Теперь получаем файлы
-            files = gdrive.list_files(
-                folder_id=facility.input_folder_id,
-                date_from=None,
-                date_to=None,
-                drive_id=facility.drive_id
-            )
+            bot.reply_to(m, f"🚀 Начинаю генерацию отчета за {d_from or 'сегодня'}...")
             
-            if not files:
-                # Попробуем получить ВСЕ содержимое без фильтров
-                query = f"'{facility.input_folder_id}' in parents"
-                response = gdrive._service.files().list(
-                    q=query,
-                    spaces='drive',
-                    fields='files(id, name, mimeType, trashed)',
-                    supportsAllDrives=True,
-                    includeItemsFromAllDrives=True
-                ).execute()
-                all_items = response.get('files', [])
+            def worker():
+                orchestrator.run(date_from=d_from)
                 
-                if all_items:
-                    print(f"   Найдено элементов (включая trashed): {len(all_items)}")
-                    for item in all_items[:5]:
-                        trashed = "🗑️" if item.get('trashed') else ""
-                        print(f"   - {item['name']} [{item['mimeType']}] {trashed}")
-                else:
-                    print("   ⚠️ Папка действительно пуста")
-            else:
-                print(f"   Найдено файлов: {len(files)}")
-                for f in files[:10]:
-                    date_str = f['file_date'].isoformat() if f.get('file_date') else 'NO DATE'
-                    print(f"   - {f['name']} [{date_str}]")
-                if len(files) > 10:
-                    print(f"   ... и ещё {len(files) - 10} файлов")
-                    
+            threading.Thread(target=worker).start()
         except Exception as e:
-            error_msg = str(e)
-            print(f"   ❌ Ошибка: {error_msg}")
-            if '404' in error_msg:
-                print(f"      → Папка не найдена или нет доступа")
-            elif '403' in error_msg:
-                print(f"      → Доступ запрещён — проверьте права")
-            # Выводим полный traceback для отладки
-            import traceback
-            print(f"      Traceback: {traceback.format_exc()}")
+            bot.reply_to(m, f"❌ Ошибка параметров: {e}")
+
+    @bot.message_handler(commands=['logs'])
+    def cmd_logs(m):
+        logs = memory_handler.get_logs()
+        if not logs:
+            bot.reply_to(m, "📝 Логи пока пусты.")
+            return
+            
+        if len(logs) < 4000:
+            bot.reply_to(m, f"📝 Последние логи:\n\n```\n{logs}\n```", parse_mode='Markdown')
+        else:
+            bot.send_document(m.chat.id, ('logs.txt', logs.encode('utf-8')), caption="📝 Полный лог работы")
+
+    def run_bot():
+        print("🤖 Telegram Bot Polling started...")
+        bot.infinity_polling()
+
+    threading.Thread(target=run_bot, daemon=True).start()
+
+    # Настройка планировщика на 08:00
+    def job():
+        logger.info("⏰ Плановый запуск (08:00)")
+        orchestrator.run()
+
+    schedule.every().day.at(TARGET_HOUR).do(job)
+    
+    print(f"🕒 Планировщик активен: запуск ежедневно в {TARGET_HOUR}")
+
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
 
 
 if __name__ == '__main__':

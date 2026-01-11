@@ -387,9 +387,10 @@ class DataProcessor:
         area_map: dict[str, str], 
         fio_map: dict[str, str]
     ) -> pd.DataFrame:
-        """Построение минутных сегментов.
+        """Построение минутных сегментов с учетом ночных смен.
         
-        Requirement: 7.4 - создание 1-минутных бинов для каждого BLE tag reading
+        Requirement: 7.4 - создание 1-минутных бинов для каждого BLE tag reading.
+        Поддерживает переход через полночь (night shift).
         
         Args:
             df: DataFrame с нормализованными и распарсенными данными
@@ -407,53 +408,72 @@ class DataProcessor:
         
         segments = []
         
-        for _, row in df.iterrows():
-            tn = str(row.get('tn_number', '')).strip()
-            shift_day = row.get('shift_day')
-            ble_tag = row.get('ble_tag')
-            zone_id = row.get('zone_id')
-            time_only = row.get('time_only')
-            
-            # Пропускаем записи без времени
-            if time_only is None or shift_day is None:
+        # Группируем по сотруднику и дате смены
+        # sort=False чтобы сохранить порядок групп, хотя внутри будем сортировать по индексу
+        grouped = df.groupby(['tn_number', 'shift_day'], sort=False)
+        
+        for (tn, shift_day), group in grouped:
+            if shift_day is None or pd.isna(shift_day):
                 continue
             
-            # Создаём datetime для начала сегмента
-            try:
-                if isinstance(shift_day, date):
-                    start_dt = datetime.combine(shift_day, time_only)
-                else:
+            # Убеждаемся что это date
+            if isinstance(shift_day, datetime):
+                shift_day = shift_day.date()
+                
+            tn = str(tn).strip()
+            
+            # Сортируем по индексу чтобы сохранить хронологию файла
+            # (важно для детекции перехода через полночь, если данные идут последовательно)
+            sorted_group = group.sort_index()
+            
+            prev_time = None
+            day_offset = 0
+            
+            for _, row in sorted_group.iterrows():
+                time_only = row.get('time_only')
+                ble_tag = row.get('ble_tag')
+                zone_id = row.get('zone_id')
+                
+                if time_only is None:
                     continue
-            except (TypeError, ValueError):
-                continue
-            
-            # Конец сегмента - через 1 минуту
-            end_dt = start_dt + timedelta(minutes=1)
-            
-            # Получаем ФИО и участок
-            employee = fio_map.get(tn, tn)
-            area = area_map.get(tn, '')
-            
-            # Получаем название зоны
-            try:
-                zone_id_int = int(zone_id) if zone_id is not None else 0
-            except (ValueError, TypeError):
-                zone_id_int = 0
-            zone_name = ZONE_NAMES.get(zone_id_int, f'Зона {zone_id_int}')
-            
-            segment = {
-                'tn_number': tn,
-                'employee': employee,
-                'area': area,
-                'date': shift_day,
-                'start': start_dt,
-                'end': end_dt,
-                'duration_minutes': 1.0,
-                'ble_tag': ble_tag,
-                'zone_id': zone_id_int,
-                'zone_name': zone_name,
-            }
-            segments.append(segment)
+                
+                # Детекция перехода через полночь
+                if prev_time is not None:
+                    # Если время "откатилось" назад (например, 23:59 -> 00:00)
+                    if time_only < prev_time:
+                         day_offset += 1
+                
+                prev_time = time_only
+                
+                # Формируем datetime с учетом смещения дня
+                current_date = shift_day + timedelta(days=day_offset)
+                start_dt = datetime.combine(current_date, time_only)
+                end_dt = start_dt + timedelta(minutes=1)
+                
+                # Получаем ФИО и участок
+                employee = fio_map.get(tn, tn)
+                area = area_map.get(tn, '')
+                
+                # Получаем название зоны
+                try:
+                    zone_id_int = int(zone_id) if zone_id is not None else 0
+                except (ValueError, TypeError):
+                    zone_id_int = 0
+                zone_name = ZONE_NAMES.get(zone_id_int, f'Зона {zone_id_int}')
+                
+                segment = {
+                    'tn_number': tn,
+                    'employee': employee,
+                    'area': area,
+                    'date': shift_day, # Оставляем оригинальную дату смены для группировки
+                    'start': start_dt,
+                    'end': end_dt,
+                    'duration_minutes': 1.0,
+                    'ble_tag': ble_tag,
+                    'zone_id': zone_id_int,
+                    'zone_name': zone_name,
+                }
+                segments.append(segment)
         
         return pd.DataFrame(segments)
     
