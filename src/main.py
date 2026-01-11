@@ -12,6 +12,7 @@ import threading
 from datetime import date, datetime, timedelta
 from typing import Optional, List
 
+import pandas as pd
 import schedule
 import telebot
 from src.config import ConfigManager, FacilityConfig
